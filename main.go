@@ -30,47 +30,49 @@ func main() {
 	}
 	start := time.Now()
 
-	commitMSG, err := generateCommitMessage(output)
+	suggestion, err := generateCommitMessage(output)
 
-	fmt.Printf("Time took for generation:%v seconds\n", time.Since(start).Abs().Seconds())
+	fmt.Printf("Time took for generation:%.2f seconds\n", time.Since(start).Seconds())
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Failed to generate commit message:", err)
 		os.Exit(1)
 	}
-
-	if !validateCommitMessage(commitMSG) {
-		fmt.Fprintln(os.Stderr, "AI generated an invalid commit message:")
-		fmt.Fprintln(os.Stderr, commitMSG)
+	if !isValidCommitType(suggestion.Type) {
+		fmt.Fprintln(os.Stderr, "AI returned an invalid commit type:", suggestion.Type)
 		os.Exit(1)
-
 	}
+
+	if strings.TrimSpace(suggestion.Description) == "" {
+		fmt.Fprintln(os.Stderr, "AI returned an invalid commit description:", suggestion.Type)
+		os.Exit(1)
+	}
+	commitMSG := formatCommitMSG(suggestion)
 	fmt.Println("Suggested commit")
-	// fmt.Println(output)
+	fmt.Println(output)
 	fmt.Println(commitMSG)
 }
 
-func generateCommitMessage(diff string) (string, error) {
-	prompt := `You are a Git commit message generator.
+func generateCommitMessage(diff string) (models.CommitSuggestion, error) {
+	prompt := `Analyze the following staged Git diff.
 
-Analyze the Git diff below and generate exactly ONE Conventional Commit message.
+Return ONLY valid JSON using exactly this structure:
 
-Format:
-<type>: <short description>
 
-Allowed types:
-feat, fix, refactor, docs, test, chore, style, perf
+example:
+{
+  "type": "feat",
+  "scope": "auth",
+  "description": "add JWT authentication"
+}
 
 Rules:
-- Return only the commit message.
-- Do not explain your answer.
-- Do not use markdown.
-- Do not use quotes.
-- Keep the description short and specific.
-- Use lowercase for the type.
-
-Example:
-feat: add JWT authentication middleware
+- type must be one of: feat, fix, refactor, docs, test, chore, style, perf
+- scope should be a short word describing the affected area
+- description should be short and specific
+- do not include markdown
+- do not include explanations
+- return only the JSON object
 
 Git diff:
 ` + diff
@@ -78,21 +80,22 @@ Git diff:
 		Model:  "qwen2.5:1.5b",
 		Prompt: prompt,
 		Stream: false,
+		Format: "json",
 	}
 	jsonData, err := json.Marshal(requestData)
 
 	if err != nil {
-		return "", err
+		return models.CommitSuggestion{}, err
 	}
 	res, err := http.Post("http://localhost:11434/api/generate", "application/json", bytes.NewBuffer(jsonData))
 
 	if err != nil {
-		return "", err
+		return models.CommitSuggestion{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(res.Body)
-		return "", fmt.Errorf(
+		return models.CommitSuggestion{}, fmt.Errorf(
 			"Ollama returned status %d: %s",
 			res.StatusCode,
 			string(body),
@@ -102,38 +105,46 @@ Git diff:
 	var ollamaResponse models.OllamaResponse
 	err = json.NewDecoder(res.Body).Decode(&ollamaResponse)
 	if err != nil {
-		return "", err
+		return models.CommitSuggestion{}, err
+	}
+	fmt.Println(ollamaResponse.Response)
+	var suggestion models.CommitSuggestion
+
+	err = json.Unmarshal([]byte(ollamaResponse.Response), &suggestion)
+	if err != nil {
+		return models.CommitSuggestion{}, err
 	}
 
-	return strings.TrimSpace(ollamaResponse.Response), nil
+	return suggestion, nil
 }
 
-func validateCommitMessage(s string) bool {
+func isValidCommitType(s string) bool {
 
 	commit := strings.ToLower(strings.TrimSpace(s))
 
-	allowedTypes := []string{
-		"feat",
-		"fix",
-		"refactor",
-		"docs",
-		"test",
-		"chore",
-		"style",
-		"perf",
+	allowedTypes := map[string]bool{
+		"feat":     true,
+		"fix":      true,
+		"refactor": true,
+		"docs":     true,
+		"test":     true,
+		"chore":    true,
+		"style":    true,
+		"perf":     true,
 	}
 
-	for _, commitType := range allowedTypes {
-
-		prefix := commitType + ":"
-		if strings.HasPrefix(commit, prefix) {
-			return true
-		}
-		// scopePrefix := commitType + "("
-		// if strings.HasPrefix(commitType, scopePrefix) &&
-		// 	strings.Contains(commitType, "):") {
-		// 	return true
-		// }
+	if allowedTypes[commit] == true {
+		return true
 	}
 	return false
+}
+
+func formatCommitMSG(response models.CommitSuggestion) string {
+	commitType := strings.ToLower(strings.TrimSpace(response.Type))
+	scope := strings.ToLower(strings.TrimSpace(response.Scope))
+	description := strings.ToLower(strings.TrimSpace(response.Description))
+	if scope == "" {
+		return fmt.Sprintf("%s: %s", commitType, description)
+	}
+	return fmt.Sprintf("%s (%s): %s", commitType, scope, description)
 }
