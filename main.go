@@ -32,15 +32,21 @@ func main() {
 
 	commitMSG, err := generateCommitMessage(output)
 
-	fmt.Printf("Time took for generation:%v", time.Since(start).Seconds())
+	fmt.Printf("Time took for generation:%v seconds\n", time.Since(start).Abs().Seconds())
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Failed to generate commit message:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Suggested commit")
-	fmt.Println(output)
 
+	if !validateCommitMessage(commitMSG) {
+		fmt.Fprintln(os.Stderr, "AI generated an invalid commit message:")
+		fmt.Fprintln(os.Stderr, commitMSG)
+		os.Exit(1)
+
+	}
+	fmt.Println("Suggested commit")
+	// fmt.Println(output)
 	fmt.Println(commitMSG)
 }
 
@@ -100,4 +106,34 @@ Git diff:
 	}
 
 	return strings.TrimSpace(ollamaResponse.Response), nil
+}
+
+func validateCommitMessage(s string) bool {
+
+	commit := strings.ToLower(strings.TrimSpace(s))
+
+	allowedTypes := []string{
+		"feat",
+		"fix",
+		"refactor",
+		"docs",
+		"test",
+		"chore",
+		"style",
+		"perf",
+	}
+
+	for _, commitType := range allowedTypes {
+
+		prefix := commitType + ":"
+		if strings.HasPrefix(commit, prefix) {
+			return true
+		}
+		// scopePrefix := commitType + "("
+		// if strings.HasPrefix(commitType, scopePrefix) &&
+		// 	strings.Contains(commitType, "):") {
+		// 	return true
+		// }
+	}
+	return false
 }
